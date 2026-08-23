@@ -166,6 +166,32 @@ def fetch_news(query: str, limit: int = 40) -> list[dict]:
     except (requests.RequestException, ElementTree.ParseError):
         return []
     return items
+@st.cache_data(ttl=86400, show_spinner=False)
+def mutual_fund_schemes() -> list[dict]:
+    try:
+        response = requests.get("https://api.mfapi.in/mf", timeout=25,
+                                headers={"User-Agent": "MarketPulse/1.0"})
+        response.raise_for_status()
+        schemes = response.json()
+        return sorted(schemes, key=lambda item: item.get("schemeName", ""))
+    except (requests.RequestException, ValueError):
+        return []
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def mutual_fund_nav(scheme_code: str) -> tuple[float | None, float | None, str]:
+    try:
+        response = requests.get(f"https://api.mfapi.in/mf/{scheme_code}", timeout=20,
+                                headers={"User-Agent": "MarketPulse/1.0"})
+        response.raise_for_status()
+        payload = response.json()
+        observations = payload.get("data", [])
+        latest = float(observations[0]["nav"]) if observations else None
+        previous = float(observations[1]["nav"]) if len(observations) > 1 else None
+        nav_date = observations[0].get("date", "") if observations else ""
+        return latest, previous, nav_date
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return None, None, ""
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def stock_research(symbol: str) -> tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -366,53 +392,82 @@ elif page == "Watchlist":
             {"name": "Reliance Industries", "symbol": "RELIANCE.NS", "type": "Stock"},
             {"name": "Gold Futures", "symbol": "GC=F", "type": "Commodity"},
         ]
-    suggestion_labels = [f"{name} — {symbol} · {asset_type}" for name, (symbol, asset_type) in ASSET_UNIVERSE.items()]
-    add_col, custom_col = st.columns([1.25, 1])
-    with add_col:
-        selected_asset = st.selectbox("Search suggestions", suggestion_labels, index=None,
-                                      placeholder="Type a company, fund, bond, or commodity...")
-    with custom_col:
-        custom_symbol = st.text_input("Or enter a Yahoo symbol", placeholder="Example: TATAMOTORS.NS")
-    if st.button("＋ Add to watchlist", type="primary"):
-        if custom_symbol.strip():
-            new_symbol = custom_symbol.strip().upper()
-            new_item = {"name": new_symbol, "symbol": new_symbol, "type": "Custom"}
-        elif selected_asset:
-            selected_index = suggestion_labels.index(selected_asset)
-            selected_name = list(ASSET_UNIVERSE)[selected_index]
-            selected_symbol, selected_type = ASSET_UNIVERSE[selected_name]
-            new_item = {"name": selected_name, "symbol": selected_symbol, "type": selected_type}
+    market_tab, mutual_fund_tab = st.tabs(["Stocks, bonds & commodities", "Indian mutual funds"])
+    with market_tab:
+        suggestion_labels = [f"{name} — {symbol} · {asset_type}" for name, (symbol, asset_type) in ASSET_UNIVERSE.items()]
+        add_col, custom_col = st.columns([1.25, 1])
+        with add_col:
+            selected_asset = st.selectbox("Search market instruments", suggestion_labels, index=None,
+                                          placeholder="Type a stock, ETF, bond, or commodity...")
+        with custom_col:
+            custom_symbol = st.text_input("Or enter a Yahoo symbol", placeholder="Example: TATAMOTORS.NS")
+        if st.button("＋ Add market instrument", type="primary"):
+            if custom_symbol.strip():
+                new_symbol = custom_symbol.strip().upper()
+                new_item = {"name": new_symbol, "symbol": new_symbol, "type": "Custom"}
+            elif selected_asset:
+                selected_index = suggestion_labels.index(selected_asset)
+                selected_name = list(ASSET_UNIVERSE)[selected_index]
+                selected_symbol, selected_type = ASSET_UNIVERSE[selected_name]
+                new_item = {"name": selected_name, "symbol": selected_symbol, "type": selected_type}
+            else:
+                new_item = None
+                st.warning("Choose a suggestion or enter a symbol first.")
+            if new_item and new_item["symbol"] not in {item["symbol"] for item in st.session_state.personal_watchlist}:
+                st.session_state.personal_watchlist.append(new_item)
+                st.rerun()
+    with mutual_fund_tab:
+        with st.spinner("Loading Indian mutual-fund schemes..."):
+            fund_schemes = mutual_fund_schemes()
+        if fund_schemes:
+            selected_fund = st.selectbox("Search mutual funds", fund_schemes, index=None,
+                                         format_func=lambda fund: f'{fund.get("schemeName", "Fund")} · {fund.get("schemeCode", "")}',
+                                         placeholder="Start typing a mutual-fund scheme name...")
+            if st.button("＋ Add mutual fund", type="primary"):
+                if selected_fund:
+                    scheme_code = str(selected_fund.get("schemeCode", ""))
+                    fund_item = {"name": selected_fund.get("schemeName", scheme_code),
+                                 "symbol": scheme_code, "type": "Mutual Fund"}
+                    if scheme_code not in {item["symbol"] for item in st.session_state.personal_watchlist}:
+                        st.session_state.personal_watchlist.append(fund_item)
+                        st.rerun()
+                else:
+                    st.warning("Select a mutual-fund scheme first.")
         else:
-            new_item = None
-            st.warning("Choose a suggestion or enter a symbol first.")
-        if new_item and new_item["symbol"] not in {item["symbol"] for item in st.session_state.personal_watchlist}:
-            st.session_state.personal_watchlist.append(new_item)
-            st.rerun()
+            st.warning("The mutual-fund directory is temporarily unavailable. Please retry shortly.")
     st.divider()
     if not st.session_state.personal_watchlist:
         st.info("Your watchlist is empty. Search above to add the first instrument.")
     for item_index, item in enumerate(st.session_state.personal_watchlist.copy()):
-        history = price_history(item["symbol"], "5d")
         latest = previous = None
-        if not history.empty:
-            closes = history["Close"].dropna()
-            if len(closes) >= 1:
-                latest = float(closes.iloc[-1])
-            if len(closes) >= 2:
-                previous = float(closes.iloc[-2])
+        nav_date = ""
+        if item["type"] == "Mutual Fund":
+            latest, previous, nav_date = mutual_fund_nav(item["symbol"])
+        else:
+            history = price_history(item["symbol"], "5d")
+            if not history.empty:
+                closes = history["Close"].dropna()
+                if len(closes) >= 1:
+                    latest = float(closes.iloc[-1])
+                if len(closes) >= 2:
+                    previous = float(closes.iloc[-2])
         delta_pct = ((latest / previous - 1) * 100) if latest is not None and previous else None
         card_col, move_col, remove_col = st.columns([2.2, 1, .55])
         card_col.markdown(f"### {item['name']}")
         card_col.caption(f"{item['symbol']} · {item['type']}")
         if latest is not None:
-            move_col.metric("Latest", f"{latest:,.2f}", f"{delta_pct:+.2f}%" if delta_pct is not None else None)
+            value_label = f"₹{latest:,.4f}" if item["type"] == "Mutual Fund" else f"{latest:,.2f}"
+            move_col.metric("Latest NAV" if item["type"] == "Mutual Fund" else "Latest", value_label,
+                            f"{delta_pct:+.2f}%" if delta_pct is not None else None)
+            if nav_date:
+                move_col.caption(f"NAV date: {nav_date}")
         else:
             move_col.metric("Latest", "Unavailable")
         if remove_col.button("Remove", key=f"remove_{item_index}"):
             st.session_state.personal_watchlist.remove(item)
             st.rerun()
         with st.expander(f"News and updates · {item['symbol']}"):
-            related_query = f'"{item["name"]}" OR "{item["symbol"]}" stock fund commodity news when:7d'
+            related_query = f'"{item["name"]}" mutual fund stock commodity news when:7d'
             render_news(fetch_news(related_query), count=6)
         st.divider()
 st.markdown("""<div class="footer">Market data provided through Yahoo Finance; headlines aggregated from Google News RSS.
