@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 from datetime import datetime
 from urllib.parse import quote_plus
 from xml.etree import ElementTree
@@ -118,7 +119,7 @@ def company_table() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_news(query: str, limit: int = 18) -> list[dict]:
+def fetch_news(query: str, limit: int = 40) -> list[dict]:
     url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-IN&gl=IN&ceid=IN:en"
     items = []
     try:
@@ -137,6 +138,52 @@ def fetch_news(query: str, limit: int = 18) -> list[dict]:
         return []
     return items
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def stock_research(symbol: str) -> tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    ticker = yf.Ticker(symbol)
+    try:
+        info = ticker.get_info()
+    except Exception:
+        info = {}
+    try:
+        income = ticker.quarterly_income_stmt
+    except Exception:
+        income = pd.DataFrame()
+    try:
+        balance = ticker.quarterly_balance_sheet
+    except Exception:
+        balance = pd.DataFrame()
+    try:
+        cashflow = ticker.quarterly_cashflow
+    except Exception:
+        cashflow = pd.DataFrame()
+    return info, income, balance, cashflow
+
+
+def compact_number(value: object, currency: str = "") -> str:
+    if not isinstance(value, (int, float)) or pd.isna(value):
+        return "N/A"
+    number = float(value)
+    for divisor, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(number) >= divisor:
+            return f"{currency}{number / divisor:,.2f}{suffix}"
+    return f"{currency}{number:,.2f}"
+
+
+def analyze_transcript(text: str) -> dict[str, list[str]]:
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text) if len(part.strip()) > 35]
+    themes = {
+        "Guidance & Outlook": ("guidance", "outlook", "expect", "target", "forecast", "next quarter", "fy"),
+        "Growth Drivers": ("growth", "demand", "order book", "expansion", "launch", "market share", "capacity"),
+        "Margins & Profitability": ("margin", "profit", "ebitda", "cost", "pricing", "operating leverage"),
+        "Risks & Watch Items": ("risk", "challenge", "pressure", "decline", "uncertain", "headwind", "slowdown"),
+        "Capital Allocation": ("capex", "dividend", "buyback", "debt", "acquisition", "investment"),
+    }
+    result = {}
+    for label, keywords in themes.items():
+        matches = [sentence for sentence in sentences if any(word in sentence.lower() for word in keywords)]
+        result[label] = matches[:4]
+    return result
 
 def chart(history: pd.DataFrame, title: str) -> go.Figure:
     fig = go.Figure()
@@ -164,7 +211,7 @@ def render_news(items: list[dict], start: int = 0, count: int = 8) -> None:
 
 with st.sidebar:
     st.markdown("### MarketPulse")
-    page = st.radio("Navigate", ["Markets & News", "Stocks", "Forecast Lab"], label_visibility="collapsed")
+    page = st.radio("Navigate", ["Markets & News", "Stocks", "Stock Research", "Forecast Lab"], label_visibility="collapsed")
     st.divider()
     focus = st.selectbox("Market focus", list(WATCHLIST), index=0)
     period = st.select_slider("Chart range", options=["1mo", "3mo", "6mo", "1y", "2y"], value="6mo")
@@ -202,7 +249,13 @@ if page == "Markets & News":
             st.markdown(f'<div class="hero"><div class="meta">TOP STORY · {html.escape(lead["source"])}</div>'
                         f'<h2>{html.escape(lead["title"])}</h2><a href="{html.escape(lead["link"], quote=True)}" '
                         f'target="_blank">Read full coverage →</a></div>', unsafe_allow_html=True)
-        render_news(news, 1, 8)
+        if "news_count" not in st.session_state:
+            st.session_state.news_count = 9
+        render_news(news, 1, st.session_state.news_count - 1)
+        if st.session_state.news_count < len(news):
+            if st.button("Load more stories", use_container_width=True):
+                st.session_state.news_count = min(st.session_state.news_count + 8, len(news))
+                st.rerun()
     with right:
         st.markdown('<div class="section-title">Global News</div>', unsafe_allow_html=True)
         global_news = fetch_news("global stock markets Wall Street Europe China Asia economy when:1d")
@@ -222,6 +275,69 @@ elif page == "Stocks":
                      hide_index=True, use_container_width=True)
     st.markdown('<div class="section-title">Company News</div>', unsafe_allow_html=True)
     render_news(fetch_news("NSE OR BSE Indian companies earnings when:2d"), count=12)
+
+elif page == "Stock Research":
+    st.markdown('<div class="section-title">Stock Research Centre</div>', unsafe_allow_html=True)
+    st.caption("Search any Yahoo Finance symbol. For NSE stocks use .NS, for example RELIANCE.NS or TCS.NS.")
+    preset = st.selectbox("Popular companies", ["Reliance Industries", "HDFC Bank", "Tata Consultancy Services",
+                                                "Infosys", "ICICI Bank", "State Bank of India", "Custom symbol"])
+    default_symbol = STOCKS.get(preset, "RELIANCE.NS")
+    symbol = st.text_input("Stock symbol", value=default_symbol).strip().upper()
+    if symbol:
+        with st.spinner(f"Loading research for {symbol}..."):
+            info, income, balance, cashflow = stock_research(symbol)
+            research_history = price_history(symbol, "1y")
+        company_name = info.get("longName") or info.get("shortName") or symbol
+        st.markdown(f"## {company_name}")
+        overview_tab, financials_tab, concall_tab = st.tabs(["Overview & Fundamentals", "Financial Statements", "Con-call Analysis"])
+        with overview_tab:
+            if research_history.empty and not info:
+                st.error("No data found. Check the symbol and try again.")
+            else:
+                currency = info.get("currency", "")
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("Market cap", compact_number(info.get("marketCap"), f"{currency} "))
+                metric_cols[1].metric("Trailing P/E", compact_number(info.get("trailingPE")))
+                metric_cols[2].metric("Price / Book", compact_number(info.get("priceToBook")))
+                metric_cols[3].metric("Dividend yield", f"{info.get('dividendYield', 0) * 100:.2f}%" if info.get("dividendYield") else "N/A")
+                metric_cols_2 = st.columns(4)
+                metric_cols_2[0].metric("52-week high", compact_number(info.get("fiftyTwoWeekHigh"), f"{currency} "))
+                metric_cols_2[1].metric("52-week low", compact_number(info.get("fiftyTwoWeekLow"), f"{currency} "))
+                metric_cols_2[2].metric("ROE", f"{info.get('returnOnEquity', 0) * 100:.2f}%" if info.get("returnOnEquity") else "N/A")
+                metric_cols_2[3].metric("Debt / Equity", compact_number(info.get("debtToEquity")))
+                if not research_history.empty:
+                    st.plotly_chart(chart(research_history, f"{company_name} · 1 year"), use_container_width=True,
+                                    config={"displayModeBar": False})
+                summary = info.get("longBusinessSummary")
+                if summary:
+                    st.markdown("#### Business overview")
+                    st.write(summary)
+        with financials_tab:
+            statement_name = st.radio("Statement", ["Quarterly income", "Quarterly balance sheet", "Quarterly cash flow"], horizontal=True)
+            statement = {"Quarterly income": income, "Quarterly balance sheet": balance,
+                         "Quarterly cash flow": cashflow}[statement_name]
+            if statement.empty:
+                st.info("This financial statement is unavailable from the free data source.")
+            else:
+                display_statement = statement.iloc[:18, :5].copy()
+                display_statement.columns = [str(col.date()) if hasattr(col, "date") else str(col) for col in display_statement.columns]
+                st.dataframe(display_statement.style.format(lambda value: compact_number(value)), use_container_width=True)
+        with concall_tab:
+            st.markdown("#### Latest con-call and earnings coverage")
+            render_news(fetch_news(f'"{company_name}" earnings call conference call transcript results when:180d'), count=8)
+            st.markdown("#### Analyse a transcript")
+            st.caption("Paste management commentary or a con-call transcript. Analysis runs privately in this session and is not saved.")
+            transcript = st.text_area("Transcript text", height=220, placeholder="Paste the con-call transcript here...")
+            if st.button("Analyse con-call", type="primary", disabled=len(transcript.strip()) < 100):
+                analysis = analyze_transcript(transcript)
+                for heading, findings in analysis.items():
+                    st.markdown(f"**{heading}**")
+                    if findings:
+                        for finding in findings:
+                            st.markdown(f"- {finding}")
+                    else:
+                        st.caption("No clear statement detected in the supplied text.")
+                st.warning("Automated text extraction can miss context. Verify conclusions against the complete call and company filings.")
 
 else:
     st.markdown('<div class="section-title">Forecast Lab</div>', unsafe_allow_html=True)
