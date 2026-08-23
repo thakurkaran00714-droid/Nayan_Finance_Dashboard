@@ -166,6 +166,36 @@ def fetch_news(query: str, limit: int = 40) -> list[dict]:
     except (requests.RequestException, ElementTree.ParseError):
         return []
     return items
+@st.cache_data(ttl=1800, show_spinner=False)
+def search_market_instruments(query: str) -> list[dict]:
+    if len(query.strip()) < 2:
+        return []
+    try:
+        response = requests.get(
+            "https://query2.finance.yahoo.com/v1/finance/search",
+            params={"q": query.strip(), "quotesCount": 20, "newsCount": 0},
+            timeout=12,
+            headers={"User-Agent": "Mozilla/5.0 MarketPulse/1.0"},
+        )
+        response.raise_for_status()
+        allowed_types = {"EQUITY", "ETF", "MUTUALFUND", "INDEX", "FUTURE", "CRYPTOCURRENCY", "CURRENCY"}
+        results = []
+        seen = set()
+        for quote in response.json().get("quotes", []):
+            symbol = quote.get("symbol", "")
+            quote_type = quote.get("quoteType", "")
+            if not symbol or symbol in seen or quote_type not in allowed_types:
+                continue
+            seen.add(symbol)
+            results.append({
+                "symbol": symbol,
+                "name": quote.get("longname") or quote.get("shortname") or symbol,
+                "type": quote_type.replace("MUTUALFUND", "Mutual Fund").title(),
+                "exchange": quote.get("exchange") or quote.get("exchDisp") or "",
+            })
+        return results
+    except (requests.RequestException, ValueError):
+        return []
 @st.cache_data(ttl=86400, show_spinner=False)
 def mutual_fund_schemes() -> list[dict]:
     try:
@@ -394,25 +424,45 @@ elif page == "Watchlist":
         ]
     market_tab, mutual_fund_tab = st.tabs(["Stocks, bonds & commodities", "Indian mutual funds"])
     with market_tab:
-        suggestion_labels = [f"{name} — {symbol} · {asset_type}" for name, (symbol, asset_type) in ASSET_UNIVERSE.items()]
-        add_col, custom_col = st.columns([1.25, 1])
-        with add_col:
-            selected_asset = st.selectbox("Search market instruments", suggestion_labels, index=None,
-                                          placeholder="Type a stock, ETF, bond, or commodity...")
+        search_col, custom_col = st.columns([1.35, 1])
+        with search_col:
+            stock_query = st.text_input("Search by company or symbol",
+                                        placeholder="Example: Tata Motors, Reliance, Apple...")
         with custom_col:
-            custom_symbol = st.text_input("Or enter a Yahoo symbol", placeholder="Example: TATAMOTORS.NS")
+            custom_symbol = st.text_input("Or enter an exact Yahoo symbol", placeholder="Example: RELIANCE.NS")
+        live_results = search_market_instruments(stock_query) if stock_query.strip() else []
+        selected_asset = None
+        if stock_query.strip() and len(stock_query.strip()) < 2:
+            st.caption("Enter at least two characters to search.")
+        elif stock_query.strip() and not live_results:
+            st.info("No live matches found. Try the company name, NSE/BSE symbol, or exact-symbol field.")
+        elif live_results:
+            selected_asset = st.selectbox(
+                "Matching instruments",
+                live_results,
+                index=None,
+                format_func=lambda asset: f'{asset["name"]} — {asset["symbol"]} · {asset["exchange"]} · {asset["type"]}',
+                placeholder="Select the correct exchange-listed instrument...",
+            )
+        with st.expander("Browse popular instruments"):
+            popular_labels = [f"{name} — {symbol} · {asset_type}" for name, (symbol, asset_type) in ASSET_UNIVERSE.items()]
+            popular_asset = st.selectbox("Popular instruments", popular_labels, index=None,
+                                         placeholder="Choose from the curated list...")
         if st.button("＋ Add market instrument", type="primary"):
             if custom_symbol.strip():
                 new_symbol = custom_symbol.strip().upper()
                 new_item = {"name": new_symbol, "symbol": new_symbol, "type": "Custom"}
             elif selected_asset:
-                selected_index = suggestion_labels.index(selected_asset)
-                selected_name = list(ASSET_UNIVERSE)[selected_index]
-                selected_symbol, selected_type = ASSET_UNIVERSE[selected_name]
-                new_item = {"name": selected_name, "symbol": selected_symbol, "type": selected_type}
+                new_item = {"name": selected_asset["name"], "symbol": selected_asset["symbol"],
+                            "type": selected_asset["type"]}
+            elif popular_asset:
+                popular_index = popular_labels.index(popular_asset)
+                popular_name = list(ASSET_UNIVERSE)[popular_index]
+                popular_symbol, popular_type = ASSET_UNIVERSE[popular_name]
+                new_item = {"name": popular_name, "symbol": popular_symbol, "type": popular_type}
             else:
                 new_item = None
-                st.warning("Choose a suggestion or enter a symbol first.")
+                st.warning("Search and select an instrument, choose a popular item, or enter an exact symbol.")
             if new_item and new_item["symbol"] not in {item["symbol"] for item in st.session_state.personal_watchlist}:
                 st.session_state.personal_watchlist.append(new_item)
                 st.rerun()
