@@ -3,8 +3,9 @@ from __future__ import annotations
 import html
 from datetime import datetime
 from urllib.parse import quote_plus
+from xml.etree import ElementTree
 
-import feedparser
+import requests
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -120,16 +121,21 @@ def company_table() -> pd.DataFrame:
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_news(query: str, limit: int = 18) -> list[dict]:
     url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-IN&gl=IN&ceid=IN:en"
-    feed = feedparser.parse(url)
     items = []
-    for entry in feed.entries[:limit]:
-        source = entry.get("source", {}).get("title", "Google News")
-        items.append({
-            "title": entry.get("title", "Market update"),
-            "link": entry.get("link", "#"),
-            "published": entry.get("published", "Latest"),
-            "source": source,
-        })
+    try:
+        response = requests.get(url, timeout=12, headers={"User-Agent": "MarketPulse/1.0"})
+        response.raise_for_status()
+        root = ElementTree.fromstring(response.content)
+        for entry in root.findall("./channel/item")[:limit]:
+            source_node = entry.find("source")
+            items.append({
+                "title": entry.findtext("title", "Market update"),
+                "link": entry.findtext("link", "#"),
+                "published": entry.findtext("pubDate", "Latest"),
+                "source": source_node.text if source_node is not None and source_node.text else "Google News",
+            })
+    except (requests.RequestException, ElementTree.ParseError):
+        return []
     return items
 
 

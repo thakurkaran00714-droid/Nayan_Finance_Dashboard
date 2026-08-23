@@ -5,7 +5,7 @@ A public-ready Streamlit dashboard for Indian and global market quotes, financia
 ## Data sources
 
 - Market prices: Yahoo Finance via `yfinance`
-- News: Google News RSS via `feedparser`
+- News: Google News RSS using Python's built-in XML parser
 
 Both sources are keyless. Quotes may be delayed and feeds can be temporarily rate-limited. The app caches market data for 15 minutes and news for 30 minutes.
 
