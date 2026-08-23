@@ -20,14 +20,13 @@ st.set_page_config(
 )
 
 WATCHLIST = {
-    "NIFTY 50": "^NSEI",
-    "SENSEX": "^BSESN",
-    "BANK NIFTY": "^NSEBANK",
     "S&P 500": "^GSPC",
     "NASDAQ": "^IXIC",
-    "GOLD": "GC=F",
-    "USD/INR": "INR=X",
-    "BITCOIN": "BTC-USD",
+    "DAX (FRANKFURT)": "^GDAXI",
+    "FTSE 100": "^FTSE",
+    "SSE COMPOSITE": "000001.SS",
+    "KOSPI": "^KS11",
+    "NIKKEI 225": "^N225",
 }
 
 STOCKS = {
@@ -205,18 +204,12 @@ if page == "Markets & News":
                         f'target="_blank">Read full coverage →</a></div>', unsafe_allow_html=True)
         render_news(news, 1, 8)
     with right:
-        st.markdown('<div class="section-title">Market Monitor</div>', unsafe_allow_html=True)
-        selected_symbol = WATCHLIST[focus]
-        hist = price_history(selected_symbol, period)
-        if not hist.empty:
-            st.plotly_chart(chart(hist, f"{focus} · {period}"), use_container_width=True,
-                            config={"displayModeBar": False})
-        st.markdown('<div class="section-title">Most Active Watchlist</div>', unsafe_allow_html=True)
-        table = company_table()
-        if not table.empty:
-            st.dataframe(table.style.format({"Price (₹)": "{:,.2f}", "Change %": "{:+.2f}%"})
-                         .map(lambda x: "color:#07883d" if isinstance(x, float) and x >= 0 else "color:#c62828",
-                              subset=["Change %"]), hide_index=True, use_container_width=True)
+        st.markdown('<div class="section-title">Global News</div>', unsafe_allow_html=True)
+        global_news = fetch_news("global stock markets Wall Street Europe China Asia economy when:1d")
+        render_news(global_news, count=6)
+        st.markdown('<div class="section-title">Institutional & Bulk Deals</div>', unsafe_allow_html=True)
+        deal_news = fetch_news("India NSE BSE bulk deal block deal institutional buying FII DII when:2d")
+        render_news(deal_news, count=6)
 
 elif page == "Stocks":
     st.markdown('<div class="section-title">Indian Equity Dashboard</div>', unsafe_allow_html=True)
