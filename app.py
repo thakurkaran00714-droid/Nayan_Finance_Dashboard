@@ -41,9 +41,32 @@ STOCKS = {
     "Larsen & Toubro": "LT.NS",
 }
 
+ASSET_UNIVERSE = {
+    "Reliance Industries": ("RELIANCE.NS", "Stock"),
+    "HDFC Bank": ("HDFCBANK.NS", "Stock"),
+    "Tata Consultancy Services": ("TCS.NS", "Stock"),
+    "Infosys": ("INFY.NS", "Stock"),
+    "ICICI Bank": ("ICICIBANK.NS", "Stock"),
+    "State Bank of India": ("SBIN.NS", "Stock"),
+    "Bharti Airtel": ("BHARTIARTL.NS", "Stock"),
+    "Apple": ("AAPL", "Stock"),
+    "Microsoft": ("MSFT", "Stock"),
+    "NVIDIA": ("NVDA", "Stock"),
+    "Nippon India Nifty 50 BeES": ("NIFTYBEES.NS", "Fund / ETF"),
+    "SBI Nifty ETF": ("SETFNIF50.NS", "Fund / ETF"),
+    "Nippon India Gold BeES": ("GOLDBEES.NS", "Fund / ETF"),
+    "Vanguard Total Bond Market ETF": ("BND", "Bond ETF"),
+    "iShares 20+ Year Treasury Bond ETF": ("TLT", "Bond ETF"),
+    "US 10-Year Treasury Yield": ("^TNX", "Bond yield"),
+    "Gold Futures": ("GC=F", "Commodity"),
+    "Silver Futures": ("SI=F", "Commodity"),
+    "Crude Oil Futures": ("CL=F", "Commodity"),
+    "Natural Gas Futures": ("NG=F", "Commodity"),
+    "Bitcoin": ("BTC-USD", "Crypto"),
+}
 
-st.markdown(
-    """
+
+st.markdown(    """
     <style>
     :root { --navy:#071b33; --blue:#0b65c2; --ink:#15243a; --muted:#66758a; --line:#dce4ec; }
     .stApp { background:#f4f7fa; color:var(--ink); }
@@ -72,6 +95,12 @@ st.markdown(
     div[data-testid="stMetricLabel"] { color:#56677c; }
     .status { font-size:11px; color:#66758a; text-align:right; }
     .footer { color:#728096; font-size:11px; border-top:1px solid var(--line); margin-top:25px; padding:15px 0; }
+    .side-brand { background:linear-gradient(145deg,#06182d,#0b65c2); color:white; border-radius:14px;
+      padding:18px 16px; margin:4px 0 18px; box-shadow:0 8px 24px rgba(7,27,51,.22); }
+    .side-brand .logo { font-size:23px; font-weight:850; letter-spacing:-.7px; }
+    .side-brand .logo b { color:#6cc4ff; }
+    .side-brand .live { display:inline-block; margin-top:8px; font-size:10px; color:#cce7ff; letter-spacing:1.2px; }
+    div[role="radiogroup"] { background:white; border:1px solid var(--line); border-radius:9px; padding:5px 8px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -210,18 +239,20 @@ def render_news(items: list[dict], start: int = 0, count: int = 8) -> None:
 
 
 with st.sidebar:
-    st.markdown("### MarketPulse")
-    page = st.radio("Navigate", ["Markets & News", "Stocks", "Stock Research", "Forecast Lab"], label_visibility="collapsed")
-    st.divider()
-    focus = st.selectbox("Market focus", list(WATCHLIST), index=0)
-    period = st.select_slider("Chart range", options=["1mo", "3mo", "6mo", "1y", "2y"], value="6mo")
+    st.markdown('<div class="side-brand"><div class="logo">Market<b>Pulse</b></div>'
+                '<div class="live">● LIVE FINANCIAL INTELLIGENCE</div></div>', unsafe_allow_html=True)
+    st.markdown("#### Personalise your feed")
     topics = st.multiselect("News desk", ["India markets", "Economy", "Companies", "IPO", "Global markets"],
                             default=["India markets", "Economy"])
-    st.caption("Data refreshes every 15–30 minutes while the app is in use.")
+    st.caption("Live headlines and quotes refresh every 15–30 minutes.")
+    st.divider()
+    st.caption("MarketPulse · India edition")
 
 st.markdown(f"""<div class="brand"><div><h1>Market<b>Pulse</b></h1>
-<span>NEWS · MARKETS · INSIGHTS</span></div><div class="status">INDIA EDITION<br>{datetime.now().strftime('%d %b %Y · %I:%M %p')}</div></div>""",
+<span>NEWS · MARKETS · RESEARCH</span></div><div class="status">INDIA EDITION<br>{datetime.now().strftime('%d %b %Y · %I:%M %p')}</div></div>""",
             unsafe_allow_html=True)
+page = st.radio("Primary navigation", ["Market News", "Stock Research", "Watchlist"],
+                horizontal=True, label_visibility="collapsed")
 
 with st.spinner("Connecting to live markets…"):
     markets = market_snapshot()
@@ -240,7 +271,7 @@ else:
 query = " OR ".join(topics) if topics else "India stock market economy business"
 news = fetch_news(f"{query} when:1d")
 
-if page == "Markets & News":
+if page == "Market News":
     left, right = st.columns([1.65, 1], gap="large")
     with left:
         st.markdown('<div class="section-title">Top Stories</div>', unsafe_allow_html=True)
@@ -263,18 +294,6 @@ if page == "Markets & News":
         st.markdown('<div class="section-title">Institutional & Bulk Deals</div>', unsafe_allow_html=True)
         deal_news = fetch_news("India NSE BSE bulk deal block deal institutional buying FII DII when:2d")
         render_news(deal_news, count=6)
-
-elif page == "Stocks":
-    st.markdown('<div class="section-title">Indian Equity Dashboard</div>', unsafe_allow_html=True)
-    table = company_table()
-    if not table.empty:
-        cols = st.columns(min(4, len(table)))
-        for col, (_, row) in zip(cols, table.head(4).iterrows()):
-            col.metric(row["Symbol"], f'₹{row["Price (₹)"]:,.2f}', f'{row["Change %"]:+.2f}%')
-        st.dataframe(table.style.format({"Price (₹)": "{:,.2f}", "Change %": "{:+.2f}%"}),
-                     hide_index=True, use_container_width=True)
-    st.markdown('<div class="section-title">Company News</div>', unsafe_allow_html=True)
-    render_news(fetch_news("NSE OR BSE Indian companies earnings when:2d"), count=12)
 
 elif page == "Stock Research":
     st.markdown('<div class="section-title">Stock Research Centre</div>', unsafe_allow_html=True)
@@ -339,37 +358,64 @@ elif page == "Stock Research":
                         st.caption("No clear statement detected in the supplied text.")
                 st.warning("Automated text extraction can miss context. Verify conclusions against the complete call and company filings.")
 
-else:
-    st.markdown('<div class="section-title">Forecast Lab</div>', unsafe_allow_html=True)
-    st.info("Scenario projections are illustrative analytics, not investment advice.")
-    symbol_name = st.selectbox("Asset", list(WATCHLIST), index=list(WATCHLIST).index(focus))
-    horizon = st.slider("Projection horizon (trading days)", 5, 90, 30)
-    hist = price_history(WATCHLIST[symbol_name], "1y")
-    if not hist.empty:
-        returns = hist["Close"].pct_change().dropna()
-        last = float(hist["Close"].iloc[-1])
-        daily_mean, daily_vol = float(returns.mean()), float(returns.std())
-        future_dates = pd.bdate_range(hist.index[-1].date(), periods=horizon + 1)[1:]
-        steps = pd.Series(range(1, horizon + 1), index=future_dates)
-        base = last * (1 + daily_mean) ** steps
-        upper = base * (1 + daily_vol * steps.pow(.5))
-        lower = base * (1 - daily_vol * steps.pow(.5))
-        fig = go.Figure([
-            go.Scatter(x=hist.index[-120:], y=hist["Close"].iloc[-120:], name="Historical", line=dict(color="#0b65c2")),
-            go.Scatter(x=future_dates, y=upper, name="Upper scenario", line=dict(width=0), showlegend=False),
-            go.Scatter(x=future_dates, y=lower, name="Lower scenario", fill="tonexty",
-                       fillcolor="rgba(11,101,194,.12)", line=dict(width=0), showlegend=False),
-            go.Scatter(x=future_dates, y=base, name="Baseline", line=dict(color="#f28c28", dash="dash")),
-        ])
-        fig.update_layout(height=480, paper_bgcolor="white", plot_bgcolor="white", hovermode="x unified",
-                          margin=dict(l=10, r=10, t=35, b=10), yaxis=dict(gridcolor="#edf1f5"))
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        a, b, c = st.columns(3)
-        a.metric("Latest close", f"{last:,.2f}")
-        b.metric("Baseline estimate", f"{base.iloc[-1]:,.2f}", f"{(base.iloc[-1]/last-1)*100:+.2f}%")
-        c.metric("Annualized volatility", f"{daily_vol * (252 ** .5) * 100:.1f}%")
-
+elif page == "Watchlist":
+    st.markdown('<div class="section-title">My Watchlist</div>', unsafe_allow_html=True)
+    st.caption("Build a live list of stocks, funds, bond instruments, commodities, or crypto. Start typing to filter suggestions.")
+    if "personal_watchlist" not in st.session_state:
+        st.session_state.personal_watchlist = [
+            {"name": "Reliance Industries", "symbol": "RELIANCE.NS", "type": "Stock"},
+            {"name": "Gold Futures", "symbol": "GC=F", "type": "Commodity"},
+        ]
+    suggestion_labels = [f"{name} — {symbol} · {asset_type}" for name, (symbol, asset_type) in ASSET_UNIVERSE.items()]
+    add_col, custom_col = st.columns([1.25, 1])
+    with add_col:
+        selected_asset = st.selectbox("Search suggestions", suggestion_labels, index=None,
+                                      placeholder="Type a company, fund, bond, or commodity...")
+    with custom_col:
+        custom_symbol = st.text_input("Or enter a Yahoo symbol", placeholder="Example: TATAMOTORS.NS")
+    if st.button("＋ Add to watchlist", type="primary"):
+        if custom_symbol.strip():
+            new_symbol = custom_symbol.strip().upper()
+            new_item = {"name": new_symbol, "symbol": new_symbol, "type": "Custom"}
+        elif selected_asset:
+            selected_index = suggestion_labels.index(selected_asset)
+            selected_name = list(ASSET_UNIVERSE)[selected_index]
+            selected_symbol, selected_type = ASSET_UNIVERSE[selected_name]
+            new_item = {"name": selected_name, "symbol": selected_symbol, "type": selected_type}
+        else:
+            new_item = None
+            st.warning("Choose a suggestion or enter a symbol first.")
+        if new_item and new_item["symbol"] not in {item["symbol"] for item in st.session_state.personal_watchlist}:
+            st.session_state.personal_watchlist.append(new_item)
+            st.rerun()
+    st.divider()
+    if not st.session_state.personal_watchlist:
+        st.info("Your watchlist is empty. Search above to add the first instrument.")
+    for item_index, item in enumerate(st.session_state.personal_watchlist.copy()):
+        history = price_history(item["symbol"], "5d")
+        latest = previous = None
+        if not history.empty:
+            closes = history["Close"].dropna()
+            if len(closes) >= 1:
+                latest = float(closes.iloc[-1])
+            if len(closes) >= 2:
+                previous = float(closes.iloc[-2])
+        delta_pct = ((latest / previous - 1) * 100) if latest is not None and previous else None
+        card_col, move_col, remove_col = st.columns([2.2, 1, .55])
+        card_col.markdown(f"### {item['name']}")
+        card_col.caption(f"{item['symbol']} · {item['type']}")
+        if latest is not None:
+            move_col.metric("Latest", f"{latest:,.2f}", f"{delta_pct:+.2f}%" if delta_pct is not None else None)
+        else:
+            move_col.metric("Latest", "Unavailable")
+        if remove_col.button("Remove", key=f"remove_{item_index}"):
+            st.session_state.personal_watchlist.remove(item)
+            st.rerun()
+        with st.expander(f"News and updates · {item['symbol']}"):
+            related_query = f'"{item["name"]}" OR "{item["symbol"]}" stock fund commodity news when:7d'
+            render_news(fetch_news(related_query), count=6)
+        st.divider()
 st.markdown("""<div class="footer">Market data provided through Yahoo Finance; headlines aggregated from Google News RSS.
-Quotes may be delayed. Forecast scenarios are statistical illustrations only and are not financial advice.</div>""",
+Quotes may be delayed. Research tools are informational and are not financial advice.</div>""",
             unsafe_allow_html=True)
 
